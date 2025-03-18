@@ -1,0 +1,102 @@
+
+import cv2
+import numpy as np
+
+def detectar_formas(imagem):
+    """Detecta formas na imagem usando Canny e findContours."""
+    cinza = cv2.cvtColor(imagem, cv2.COLOR_BGR2GRAY)
+    cinza = cv2.GaussianBlur(cinza, (5, 5), 0)
+    bordas = cv2.Canny(cinza, 50, 150)
+    contornos, _ = cv2.findContours(bordas, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    formas = []
+    for contorno in contornos:
+        area = cv2.contourArea(contorno)
+        if area > 100:
+            formas.append((contorno, area))
+    
+    return formas
+
+def desenhar_maior_forma(imagem, formas):
+    """Desenha um retângulo vermelho ao redor da maior forma detectada."""
+    maior_area = 0
+    forma_maior = None
+
+    for contorno, area in formas:
+        if area > maior_area:
+            maior_area = area
+            forma_maior = contorno
+
+    if forma_maior is not None:
+        x, y, w, h = cv2.boundingRect(forma_maior)
+        cv2.rectangle(imagem, (x, y), (x + w, y + h), (0, 0, 255), 2)
+
+    return forma_maior
+
+def calcular_area_sobreposicao(contorno1, contorno2):
+    """Calcula a área de sobreposição entre dois contornos."""
+    ret, img = cv2.threshold(cv2.drawContours(np.zeros((480, 640), np.uint8), [contorno1], -1, 255, cv2.FILLED), 127, 255, 0)
+    ret, img2 = cv2.threshold(cv2.drawContours(np.zeros((480, 640), np.uint8), [contorno2], -1, 255, cv2.FILLED), 127, 255, 0)
+    intersection = cv2.bitwise_and(img, img2)
+    return cv2.countNonZero(intersection)
+
+def detectar_colisao(contorno1, contorno2, limiar_area=30):
+    """Verifica se há colisão entre duas formas com base na área de sobreposição."""
+    area_sobreposicao = calcular_area_sobreposicao(contorno1, contorno2)
+    return area_sobreposicao > limiar_area
+
+def simplificar_contorno(contorno, epsilon=0.02):
+    """Simplifica um contorno usando cv2.approxPolyDP."""
+    perimetro = cv2.arcLength(contorno, True)
+    return cv2.approxPolyDP(contorno, epsilon * perimetro, True)
+
+def filtrar_contornos_por_area(contornos, area_minima=50):
+    """Filtra contornos com base em sua área."""
+    return [contorno for contorno, area in contornos if area > area_minima]
+
+def criar_mascara_cor(imagem, cor_minima, cor_maxima):
+    """Cria uma máscara de cor para segmentar uma região."""
+    hsv = cv2.cvtColor(imagem, cv2.COLOR_BGR2HSV)
+    mascara = cv2.inRange(hsv, cor_minima, cor_maxima)
+    return mascara
+
+cap = cv2.VideoCapture("q1B.mp4")
+ultima_posicao_maior = None
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    roi = frame[0:400, 0:640]
+
+    cor_minima = np.array([0, 0, 0])
+    cor_maxima = np.array([100, 100, 100])
+    mascara_cor = criar_mascara_cor(roi, cor_minima, cor_maxima)
+    roi_mascarado = cv2.bitwise_and(roi, roi, mask=mascara_cor)
+
+    frame_filtrado = cv2.bilateralFilter(roi_mascarado, 9, 75, 75)
+
+    formas = detectar_formas(frame_filtrado)
+    formas_filtradas = [(simplificar_contorno(contorno), area) for contorno, area in formas]
+    formas_filtradas = filtrar_contornos_por_area(formas_filtradas)
+
+    forma_maior = desenhar_maior_forma(frame, formas_filtradas)
+
+    colisao_detectada = False
+    for i, contorno1 in enumerate(formas_filtradas):
+        for j, contorno2 in enumerate(formas_filtradas):
+            colidiu = detectar_colisao(contorno1, contorno2)
+            print(f"Colisão entre {i} e {j}: {colidiu}")
+            if colidiu:
+                colisao_detectada = True
+                cv2.putText(frame, "COLISÃO DETECTADA", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2, cv2.LINE_AA)
+            cv2.drawContours(frame, [contorno1], -1, (0, 255, 0), 2)
+            cv2.drawContours(frame, [contorno2], -1, (255, 0, 0), 2)
+    
+    cv2.imshow("Feed", frame)
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
+
+cap.release()
+cv2.destroyAllWindows()
